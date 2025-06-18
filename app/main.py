@@ -3,6 +3,7 @@ import time
 from fastapi import FastAPI, Request, Response  
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
 import threading
 from contextlib import asynccontextmanager
 from app.settings import settings
@@ -81,6 +82,16 @@ async def lifespan(app: FastAPI):
       print("Camera resource released.")
 
 app = FastAPI(lifespan=lifespan)
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods
+    allow_headers=["*"],  # Allows all headers
+)
+
 templates = Jinja2Templates(directory="templates")
 
 def gen_frames():
