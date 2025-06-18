@@ -1,0 +1,30 @@
+name: homecam-api
+
+services:
+  homecam-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - 8020:8020
+    # Mount webcam devices for camera access
+    devices:
+      - /dev/video0:/dev/video0
+      - /dev/video1:/dev/video1
+      - /dev/video2:/dev/video2
+    environment:
+      - CAMERA_DEVICE_ID=2
+      - CAMERA_WIDTH=1280
+      - CAMERA_HEIGHT=720
+      - CAMERA_FPS=10
+    # Add privileged access for camera devices
+    privileged: true
+    # Alternative: use specific capabilities instead of privileged
+    # cap_add:
+    #   - SYS_ADMIN
+    # Override default CMD if needed (optional)
+    # command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8020", "--reload"]
+    # 
+    # Alternative port mapping (if you want different external port)
+    # ports:
+    #   - "8080:8020"  # External:Internal

@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>USB Webcam Stream</title>
+    <style>
+        .container {
+            text-align: center;
+            padding: 20px;
+        }
+        .webcam-stream {
+            max-width: 100%;
+            border: 2px solid #333;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+        .controls {
+            margin-top: 20px;
+        }
+        button {
+            padding: 10px 20px;
+            margin: 5px;
+            border: none;
+            border-radius: 5px;
+            background-color: #007bff;
+            color: white;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Live USB Webcam Feed</h1>
+        <img src="/video_feed" alt="Live webcam stream" class="webcam-stream">
+        <div class="controls">
+            <button onclick="refreshStream()">Refresh Stream</button>
+            <button onclick="takeSnapshot()">Take Snapshot</button>
+        </div>
+    </div>
+
+    <script>
+        function refreshStream() {
+            const img = document.querySelector('.webcam-stream');
+            img.src = '/video_feed?' + new Date().getTime();
+        }
+
+        function takeSnapshot() {
+            window.open('/snapshot', '_blank');
+        }
+    </script>
+</body>
+</html>
