@@ -6,36 +6,21 @@ ENV UV_PYTHON_DOWNLOADS=0
 
 WORKDIR /app
 
-# Update apt package list
-RUN apt-get -y update
-
-# Install OpenCV dependencies and build tools
-RUN apt-get install -y --fix-missing \
+# Update apt package list and install only necessary build dependencies
+RUN apt-get -y update && apt-get install -y --no-install-recommends \
     build-essential \
-    wget \
-    curl \
+    pkg-config \
+    python3-dev \
+    # OpenCV build dependencies
     libavcodec-dev \
     libavformat-dev \
     libswscale-dev \
-    libgstreamer1.0-dev \
-    libgstreamer-plugins-base1.0-dev \
-    libgtk2.0-dev \
     libjpeg-dev \
     libpng-dev \
-    libtiff-dev \
-    libdc1394-dev \
-    pkg-config \
-    python3-dev \
-    python3-numpy \
-    libgl1-mesa-glx \
-    libglib2.0-0 \
-    libsm6 \
-    libxext6 \
-    libxrender-dev \
-    libgomp1 \
-    libgcc-s1 \
+    libgl1-mesa-dev \
     && rm -rf /var/lib/apt/lists/*
 
+# Install Python dependencies
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=uv.lock,target=uv.lock \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
@@ -45,22 +30,26 @@ COPY . /app
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev
 
+# Production stage with minimal runtime dependencies
 FROM python:3.13-slim-bookworm
 
-# Install runtime dependencies for OpenCV
+# Install only runtime dependencies for OpenCV
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    # OpenCV runtime libraries (minimal set)
     libgl1-mesa-glx \
     libglib2.0-0 \
-    libsm6 \
-    libxext6 \
-    libxrender-dev \
     libgomp1 \
-    libgcc-s1 \
-    libgstreamer1.0-0 \
-    libgstreamer-plugins-base1.0-0 \
-    && rm -rf /var/lib/apt/lists/*
+    # JPEG/PNG support for OpenCV
+    libjpeg62-turbo \
+    libpng16-16 \
+    # Video format support
+    libavcodec59 \
+    libavformat59 \
+    libswscale6 \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
 
-# Copy the entire application and virtual environment
+# Copy the application and virtual environment from builder
 COPY --from=builder /app /app
 
 # Set environment variables

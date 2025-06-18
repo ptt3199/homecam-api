@@ -7,8 +7,7 @@ requires-python = ">=3.13"
 dependencies = [
     "fastapi[standard]>=0.115.13",
     "jinja2>=3.1.6",
-    "opencv-contrib-python>=4.11.0.86",
-    "opencv-python>=4.11.0.86",
+    "opencv-python-headless>=4.11.0.86",
     "pydantic-settings>=2.9.1",
     "python-multipart>=0.0.20",
     "uvicorn>=0.34.3",
