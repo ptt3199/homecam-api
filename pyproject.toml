@@ -1,14 +1,27 @@
 [project]
 name = "homecam-api"
 version = "0.1.0"
-description = "Add your description here"
+description = "Home camera streaming API with FastAPI"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.11"
 dependencies = [
-    "fastapi[standard]>=0.115.13",
-    "jinja2>=3.1.6",
-    "opencv-python-headless>=4.11.0.86",
-    "pydantic-settings>=2.9.1",
-    "python-multipart>=0.0.20",
-    "uvicorn>=0.34.3",
+    "fastapi[standard]>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "opencv-python-headless>=4.8.0",
+    "jinja2>=3.1.0",
+    "python-multipart>=0.0.6",
+    "pydantic-settings>=2.0.0",
+    "python-jose[cryptography]>=3.3.0",
+    "httpx>=0.25.0",
+    "cryptography>=41.0.0",
 ]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]

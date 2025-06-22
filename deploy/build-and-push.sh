@@ -47,11 +47,19 @@ build_and_push() {
     echo "🚀 Building and pushing multi-platform image..."
     echo "This may take several minutes..."
     
+    # Get the directory where this script is located
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    # Get the parent directory (homecam-api root)
+    PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+    
+    echo "Building from directory: $PROJECT_ROOT"
+    
     docker buildx build \
         --platform linux/amd64,linux/arm64 \
         --tag ${FULL_IMAGE_NAME} \
         --push \
-        .
+        --file "$PROJECT_ROOT/Dockerfile" \
+        "$PROJECT_ROOT"
     
     echo "✅ Build and push completed successfully!"
 }
