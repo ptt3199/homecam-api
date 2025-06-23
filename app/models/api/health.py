@@ -3,7 +3,7 @@
 from app.models.api.base import BaseResponse
 from typing import Optional
 
-
+ 
 class HealthResponse(BaseResponse):
   """Health check response."""
   status: str = "healthy"

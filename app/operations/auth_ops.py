@@ -1,23 +1,18 @@
 """Authentication operations and JWT handling."""
 
-from jose import jwt
+from app.settings import settings   
+from jose import jwt, JWTError
+from jose.exceptions import ExpiredSignatureError
+from jose.backends import RSAKey
 import httpx
 import time
-from fastapi import HTTPException, Depends, status
-from fastapi.security import OAuth2PasswordBearer, HTTPAuthorizationCredentials, HTTPBearer
+from fastapi import HTTPException, Depends, status, Query
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from functools import lru_cache
-import time
-from typing import Optional, Dict, Any
-from app.settings import settings
+from typing import Dict, Any
 from app.log import get_logger
 
-# OAuth2 scheme for FastAPI docs integration
-oauth2_scheme = OAuth2PasswordBearer(
-  tokenUrl="/auth/login",
-  description="Login with email/username and password to get access token"
-)
-
-# HTTP Bearer for manual token usage
+# HTTP Bearer for token authentication
 security = HTTPBearer()
 logger = get_logger(__name__)
 
@@ -28,49 +23,59 @@ class ClerkJWTVerifier:
         self.jwks_cache = {}
         self.jwks_cache_time = 0
         self.jwks_cache_ttl = 3600  # 1 hour
-        
-    @lru_cache(maxsize=1)
-    def get_clerk_jwks_url(self) -> str:
-        """Get Clerk JWKS URL from publishable key."""
-        if not settings.clerk_publishable_key:
-            raise ValueError("CLERK_PUBLISHABLE_KEY not configured")
-        
-        # Extract domain from publishable key (format: pk_test_xxx or pk_live_xxx)
-        key_parts = settings.clerk_publishable_key.split('_')
-        if len(key_parts) < 3:
-            raise ValueError("Invalid Clerk publishable key format")
-        
-        # For most cases, use the standard Clerk API domain
-        return "https://api.clerk.com/v1/jwks"
     
-    def get_jwks(self) -> Dict[str, Any]:
-        """Get JWKS from Clerk with caching."""
+    @lru_cache(maxsize=128)
+    def get_jwks_from_url(self, jwks_url: str) -> Dict[str, Any]:
+        """Get JWKS from URL with caching."""
         current_time = time.time()
         
-        # Return cached JWKS if still valid
-        if (self.jwks_cache and 
+        # Check cache
+        if (jwks_url in self.jwks_cache and 
             current_time - self.jwks_cache_time < self.jwks_cache_ttl):
-            return self.jwks_cache
+            return self.jwks_cache[jwks_url]
         
         try:
-            jwks_url = self.get_clerk_jwks_url()
-            with httpx.Client(timeout=10.0) as client:
+            with httpx.Client(timeout=30.0) as client:
                 response = client.get(jwks_url)
                 response.raise_for_status()
+                jwks = response.json()
                 
-                self.jwks_cache = response.json()
+                # Cache the result
+                self.jwks_cache[jwks_url] = jwks
                 self.jwks_cache_time = current_time
                 
-                return self.jwks_cache
-            
+                return jwks
+                
         except Exception as e:
-            logger.error("Failed to fetch JWKS: %s", str(e))
-            # Return cached JWKS if available, even if expired
-            if self.jwks_cache:
-                return self.jwks_cache
+            logger.error("Failed to fetch JWKS from %s: %s", jwks_url, e)
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Authentication service unavailable"
+                detail="Unable to fetch signing keys"
+            )
+    
+    def get_jwks_url_from_token(self, token: str) -> str:
+        """Extract JWKS URL from token issuer."""
+        try:
+            # Decode without verification to get issuer
+            payload = jwt.get_unverified_claims(token)
+            issuer = payload.get('iss')
+            
+            if not issuer:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Token missing issuer"
+                )
+            
+            # Construct JWKS URL from issuer
+            if issuer.endswith('/'):
+                issuer = issuer[:-1]
+            
+            return f"{issuer}/.well-known/jwks.json"
+            
+        except JWTError as e:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=f"Invalid token format: {str(e)}"
             )
     
     def get_signing_key(self, token: str) -> str:
@@ -86,20 +91,21 @@ class ClerkJWTVerifier:
                     detail="Token missing key ID"
                 )
             
-            # Get JWKS and find matching key
-            jwks = self.get_jwks()
+            # Get JWKS from token issuer
+            jwks_url = self.get_jwks_url_from_token(token)
+            jwks = self.get_jwks_from_url(jwks_url)
             
             for key in jwks.get('keys', []):
                 if key.get('kid') == kid:
-                    # Convert JWK to PEM format
-                    return jwt.algorithms.RSAAlgorithm.from_jwk(key)
+                    # Convert JWK to RSA key
+                    return RSAKey(key, algorithm='RS256').to_pem()
             
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Unable to find appropriate signing key"
             )
             
-        except jwt.InvalidTokenError as e:
+        except JWTError as e:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail=f"Invalid token format: {str(e)}"
@@ -108,33 +114,6 @@ class ClerkJWTVerifier:
     def verify_token(self, token: str) -> Dict[str, Any]:
         """Verify Clerk JWT token."""
         try:
-            # Handle admin token
-            if token == "admin-jwt-token-ptt-home":
-                logger.info("Admin token verification successful")
-                return {
-                    "sub": "admin-user",
-                    "email": settings.admin_email,
-                    "username": settings.admin_username,
-                    "iat": int(time.time()),
-                    "exp": int(time.time()) + 3600
-                }
-            
-            # Handle old development/mock tokens for backward compatibility
-            if token == "mock-jwt-token-for-development" or token.startswith("clerk-mock-"):
-                logger.warning("Using deprecated mock token")
-                if token.startswith("clerk-mock-"):
-                    user_id = token.replace("clerk-mock-", "")
-                else:
-                    user_id = "dev-user-123"
-                
-                return {
-                    "sub": user_id,
-                    "email": "dev@example.com",
-                    "username": "dev-user",
-                    "iat": int(time.time()),
-                    "exp": int(time.time()) + 3600
-                }
-            
             # Get signing key
             signing_key = self.get_signing_key(token)
             
@@ -151,14 +130,17 @@ class ClerkJWTVerifier:
                 }
             )
             
+            logger.info("Token verification successful for user: %s", payload.get("sub"))
             return payload
             
-        except jwt.ExpiredSignatureError:
+        except ExpiredSignatureError:
+            logger.warning("Expired token presented")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Token has expired"
             )
-        except jwt.InvalidTokenError as e:
+        except JWTError as e:
+            logger.warning("Invalid JWT token: %s", str(e))
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail=f"Invalid token: {str(e)}"
@@ -171,204 +153,122 @@ class ClerkJWTVerifier:
             )
 
 
-class ClerkAuthenticator:
-    """Handle Clerk authentication operations."""
-    
-    def __init__(self):
-        self.base_url = "https://api.clerk.com/v1"
-    
-    def _get_headers(self) -> Dict[str, str]:
-        """Get headers for Clerk API requests."""
-        if not settings.clerk_secret_key:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Clerk secret key not configured"
-            )
-        
-        return {
-            "Authorization": f"Bearer {settings.clerk_secret_key}",
-            "Content-Type": "application/json"
-        }
-    
-    async def login_with_credentials(self, identifier: str, password: str) -> Dict[str, Any]:
-        """Login user with email/username and password using Clerk API."""
-        try:
-            # Get admin credentials from settings
-            ADMIN_USERNAME = settings.admin_username
-            ADMIN_EMAIL = settings.admin_email  
-            ADMIN_PASSWORD = settings.admin_password
-            
-            # Check if this is the admin account
-            is_admin_login = (
-              (identifier == ADMIN_USERNAME or identifier == ADMIN_EMAIL) and 
-              password == ADMIN_PASSWORD
-            )
-            
-            if is_admin_login:
-              logger.info("Admin login successful for: %s", identifier)
-              return {
-                "access_token": "admin-jwt-token-ptt-home",
-                "user_id": "admin-user",
-                "email": ADMIN_EMAIL,
-                "username": ADMIN_USERNAME,
-                "expires_in": 3600
-              }
-            
-            # For development mode, still allow the admin only
-            if settings.development_mode:
-              logger.warning("Development mode: Invalid credentials for %s", identifier)
-              raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid credentials. Only admin account is allowed."
-              )
-            
-            # Real Clerk authentication (for production)
-            logger.info("Attempting Clerk user lookup for: %s", identifier)
-            
-            # Try using Clerk's Backend API to verify user exists
-            async with httpx.AsyncClient(timeout=30.0) as client:
-              # Use Clerk Backend API to find the user
-              backend_url = f"{self.base_url}/users"
-              
-              # Get headers for Clerk API
-              headers = self._get_headers()
-              
-              # Search for user by email or username
-              search_params = {}
-              if "@" in identifier:
-                search_params["email_address"] = [identifier]
-              else:
-                search_params["username"] = [identifier]
-              
-              logger.info("Searching for user in Clerk with params: %s", search_params)
-              
-              user_response = await client.get(
-                backend_url,
-                headers=headers,
-                params=search_params
-              )
-              
-              logger.info("Clerk API response status: %s", user_response.status_code)
-              
-              if user_response.status_code != 200:
-                logger.error("Failed to find user in Clerk: %s - %s", user_response.status_code, user_response.text)
-                raise HTTPException(
-                  status_code=status.HTTP_401_UNAUTHORIZED,
-                  detail="Invalid credentials"
-                )
-              
-              users = user_response.json()
-              if not users:
-                logger.error("User not found in Clerk database")
-                raise HTTPException(
-                  status_code=status.HTTP_401_UNAUTHORIZED,
-                  detail="Invalid credentials"
-                )
-              
-              user = users[0]
-              user_id = user["id"]
-              
-              logger.info("Found user in Clerk: %s", user_id)
-              
-              # For production, we still need to implement real password verification
-              # For now, reject all non-admin logins in production too
-              logger.warning("Production Clerk login not implemented, rejecting user: %s", user_id)
-              raise HTTPException(
-                status_code=status.HTTP_501_NOT_IMPLEMENTED,
-                detail="Clerk password verification not implemented. Use frontend authentication."
-              )
-              
-        except HTTPException:
-            raise
-        except httpx.RequestError as e:
-            logger.error("Authentication service error: %s", str(e))
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Authentication service unavailable"
-            )
-        except Exception as e:
-            logger.error("Login error: %s", e)
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Login failed"
-            )
-    
-    def _get_frontend_api_domain(self) -> str:
-        """Extract frontend API domain from publishable key."""
-        if not settings.clerk_publishable_key:
-            raise ValueError("Clerk publishable key not configured")
-        
-        # Extract instance ID from publishable key
-        # Format: pk_test_<instance>.<domain> or pk_live_<instance>.<domain>
-        key_parts = settings.clerk_publishable_key.split('_')
-        if len(key_parts) >= 3:
-            instance_part = '_'.join(key_parts[2:])  # Everything after pk_test_ or pk_live_
-            if '.' in instance_part:
-                return instance_part
-        
-        # Fallback to default
-        return "clerk.accounts.dev"
-
-
-# Global instances
+# Global verifier instance
 clerk_verifier = ClerkJWTVerifier()
-clerk_authenticator = ClerkAuthenticator()
 
 
-async def login_user(identifier: str, password: str) -> Dict[str, Any]:
-    """Login user with email/username and password."""
-    return await clerk_authenticator.login_with_credentials(identifier, password)
-
-
-async def get_current_user(token: str = Depends(oauth2_scheme)) -> Dict[str, Any]:
-    """Dependency to get current authenticated user from JWT token.
-    
-    This uses OAuth2PasswordBearer which integrates with FastAPI docs.
-    Users can click the lock icon and enter credentials to get a token.
+def generate_streaming_token(user_id: str, expires_minutes: int = 5) -> str:
     """
-    # Skip authentication in development mode
-    if settings.development_mode:
-        return {"sub": "dev-user", "email": "dev@localhost"}
+    Generate a short-lived token specifically for streaming endpoints.
+    This reduces security risks by having tokens expire quickly.
+    """
+    import time
+    from jose import jwt
     
-    # Skip authentication if Clerk verification is disabled
-    if not settings.clerk_jwt_verification:
-        return {"sub": "anonymous", "email": "anonymous@localhost"}
+    payload = {
+        "user_id": user_id,
+        "token_type": "streaming",
+        "exp": int(time.time()) + (expires_minutes * 60),
+        "iat": int(time.time())
+    }
     
-    # Verify token
-    user_payload = clerk_verifier.verify_token(token)
-    return user_payload
+    # Use a simple secret for streaming tokens (separate from Clerk)
+    # In production, use a strong secret key
+    streaming_secret = settings.streaming_token_secret
+    return jwt.encode(payload, streaming_secret, algorithm="HS256")
 
 
-async def get_current_user_bearer(credentials: HTTPAuthorizationCredentials = Depends(security)) -> Dict[str, Any]:
-    """Alternative dependency for manual Bearer token usage."""
-    # Skip authentication in development mode
-    if settings.development_mode:
-        return {"sub": "dev-user", "email": "dev@localhost"}
-    
-    # Skip authentication if Clerk verification is disabled
-    if not settings.clerk_jwt_verification:
-        return {"sub": "anonymous", "email": "anonymous@localhost"}
-    
-    # Verify token
-    token = credentials.credentials
-    user_payload = clerk_verifier.verify_token(token)
-    return user_payload
-
-
-async def get_optional_user(token: Optional[str] = Depends(oauth2_scheme)) -> Optional[Dict[str, Any]]:
-    """Optional authentication - returns user if authenticated, None if not."""
-    if not token:
-        return None
-    
+def verify_streaming_token(token: str) -> Dict[str, Any]:
+    """
+    Verify a short-lived streaming token.
+    """
     try:
-        return await get_current_user(token)
-    except HTTPException:
-        return None
+        streaming_secret = settings.streaming_token_secret
+        payload = jwt.decode(token, streaming_secret, algorithms=["HS256"])
+        
+        if payload.get("token_type") != "streaming":
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token type"
+            )
+            
+        return payload
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Streaming token expired"
+        )
+    except jwt.JWTError as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Invalid streaming token: {str(e)}"
+        )
 
 
-def require_auth(user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
-    """Simple dependency that requires authentication.
-    
-    Use this for protected endpoints. Integrates with FastAPI docs OAuth2.
+async def get_current_user_header(
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+) -> Dict[str, Any]:
     """
-    return user 
+    Get current user from Authorization Bearer header.
+    Use this for regular API endpoints (POST, PUT, DELETE, etc.)
+    """
+    try:
+        token = credentials.credentials
+        payload = clerk_verifier.verify_token(token)
+        return {
+            "user_id": payload.get("sub"),
+            "email": payload.get("email"),
+            "username": payload.get("username", payload.get("email", "").split("@")[0]),
+            "token_payload": payload,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Header auth error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication failed"
+        )
+
+
+async def get_current_user_stream(token: str = Query(...)) -> Dict[str, Any]:
+    """
+    Get current user from query parameter token.
+    Use this for streaming endpoints that need URL-based auth.
+    
+    Accepts both:
+    1. Clerk JWT tokens (full auth)
+    2. Short-lived streaming tokens (streaming-only access)
+    """
+    try:
+        # Try Clerk JWT first
+        try:
+            payload = clerk_verifier.verify_token(token)
+            return {
+                "user_id": payload.get("sub"),
+                "email": payload.get("email"),
+                "username": payload.get("username", payload.get("email", "").split("@")[0]),
+                "token_payload": payload,
+                "token_type": "clerk_jwt"
+            }
+        except Exception as e:
+            logger.error(f"Clerk JWT verification error: {str(e)}")
+            # If Clerk JWT fails, try streaming token
+            payload = verify_streaming_token(token)
+            return {
+                "user_id": payload.get("user_id"),
+                "token_payload": payload,
+                "token_type": "streaming"
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Stream auth error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token"
+        )
+
+
+# Keep the old function name for compatibility
+get_current_user = get_current_user_header

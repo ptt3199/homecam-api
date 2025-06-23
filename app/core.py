@@ -8,7 +8,6 @@ from contextlib import (
     asynccontextmanager,
 )
 from uuid import uuid4
-from xmlrpc.client import boolean
 
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -20,7 +19,7 @@ from fastapi.responses import HTMLResponse
 from app.exceptions.handlers import setup_error_handlers
 from app.log import get_logger
 from app.settings import settings
-from app.operations.camera_ops import initialize_camera, release_camera
+from app.operations.camera_ops import release_camera
 
 logger = get_logger(__name__)
 
@@ -49,7 +48,6 @@ def custom_lifespan(
         yield
         
         # Cleanup phase
-        from app.operations.camera_ops import release_camera
         release_camera()
         logger.info("Stopping FastAPI application")
 
@@ -69,7 +67,7 @@ def setup_api(
     prefix: str,
     service_lifespan: Callable[[FastAPI], Awaitable[None]] | None = None,
     *,
-    log_request: boolean = True,
+    log_request: bool = True,
 ) -> FastAPI:
     """Set up and configure a FastAPI application with custom settings.
 
@@ -96,11 +94,7 @@ def setup_api(
         title="PTT Home Camera API",
         description="Home camera streaming and control API with authentication",
         version="1.0.0",
-        openapi_tags=[
-            {
-                "name": "authentication",
-                "description": "Authentication and user management"
-            },
+        openapi_tags=[  
             {
                 "name": "camera",
                 "description": "Camera streaming and control"
@@ -134,10 +128,10 @@ def setup_api(
     origins = [
         "http://localhost",
         "http://localhost:3000",
-        "http://localhost:8080",
-        "http://localhost:9000",
         "https://localhost",
         "https://localhost:3000",
+        "https://homecam.thanhpt.xyz",
+        "https://homecam.thanhpt.xyz:3000",
     ]
     app.add_middleware(
         CORSMiddleware,

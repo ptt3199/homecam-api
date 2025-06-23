@@ -12,9 +12,20 @@
             border: 2px solid #333;
             border-radius: 8px;
             box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+            display: none;
         }
         .controls {
             margin-top: 20px;
+        }
+        .token-input {
+            margin-bottom: 20px;
+        }
+        .token-input input {
+            width: 60%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-family: monospace;
         }
         button {
             padding: 10px 20px;
@@ -25,27 +36,195 @@
             color: white;
             cursor: pointer;
         }
+        button:hover {
+            background-color: #0056b3;
+        }
+        button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        .error {
+            color: red;
+            margin: 10px 0;
+        }
+        .success {
+            color: green;
+            margin: 10px 0;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>Live USB Webcam Feed</h1>
-        <img src="/video_feed" alt="Live webcam stream" class="webcam-stream">
-        <div class="controls">
+        
+        <div class="token-input">
+            <h3>Authentication Required</h3>
+            <p>Enter your Clerk JWT token to access the camera feed:</p>
+            <input type="text" id="tokenInput" placeholder="Enter JWT token here..." />
+            <br><br>
+            <button onclick="authenticateAndShowStream()">Connect to Camera</button>
+        </div>
+        
+        <div id="errorMessage" class="error" style="display: none;"></div>
+        <div id="successMessage" class="success" style="display: none;"></div>
+        
+        <img id="webcamStream" src="" alt="Live webcam stream" class="webcam-stream">
+        
+        <div class="controls" id="controls" style="display: none;">
+            <button onclick="startStream()">Start Stream</button>
+            <button onclick="stopStream()">Stop Stream</button>
             <button onclick="refreshStream()">Refresh Stream</button>
             <button onclick="takeSnapshot()">Take Snapshot</button>
+            <button onclick="disconnect()">Disconnect</button>
         </div>
     </div>
 
     <script>
+        let currentToken = '';
+        
+        // Check if token exists in localStorage on page load
+        window.onload = function() {
+            const savedToken = localStorage.getItem('jwt_token');
+            if (savedToken) {
+                document.getElementById('tokenInput').value = savedToken;
+                authenticateAndShowStream();
+            }
+        };
+
+        function showError(message) {
+            const errorDiv = document.getElementById('errorMessage');
+            errorDiv.textContent = message;
+            errorDiv.style.display = 'block';
+            document.getElementById('successMessage').style.display = 'none';
+        }
+
+        function showSuccess(message) {
+            const successDiv = document.getElementById('successMessage');
+            successDiv.textContent = message;
+            successDiv.style.display = 'block';
+            document.getElementById('errorMessage').style.display = 'none';
+        }
+
+        function hideMessages() {
+            document.getElementById('errorMessage').style.display = 'none';
+            document.getElementById('successMessage').style.display = 'none';
+        }
+
+        async function authenticateAndShowStream() {
+            const token = document.getElementById('tokenInput').value.trim();
+            
+            if (!token) {
+                showError('Please enter a JWT token');
+                return;
+            }
+
+            hideMessages();
+            
+            try {
+                                 // Test the token by making a request to a protected endpoint
+                 const response = await fetch('/camera/status', {
+                     headers: {
+                         'Authorization': 'Bearer ' + token
+                     }
+                 });
+                
+                if (response.ok) {
+                    currentToken = token;
+                    localStorage.setItem('jwt_token', token); // Save token for future use
+                    showSuccess('Authentication successful! Loading camera feed...');
+                    
+                                         // Show the video stream
+                     const webcamStream = document.getElementById('webcamStream');
+                     webcamStream.src = '/camera/feed?token=' + encodeURIComponent(token);
+                    webcamStream.style.display = 'block';
+                    
+                    // Show controls
+                    document.getElementById('controls').style.display = 'block';
+                    
+                    // Handle image load error
+                    webcamStream.onerror = function() {
+                        showError('Failed to load video stream. Check your token or camera status.');
+                    };
+                    
+                    webcamStream.onload = function() {
+                        hideMessages();
+                    };
+                    
+                } else if (response.status === 401) {
+                    showError('Invalid or expired token. Please check your JWT token.');
+                } else {
+                    showError('Authentication failed. Server returned: ' + response.status);
+                }
+            } catch (error) {
+                showError('Connection error: ' + error.message);
+            }
+        }
+
+        function startStream() {
+            if (!currentToken) {
+                showError('No active token. Please authenticate first.');
+                return;
+            }
+            fetch('/camera/start', {
+                method: 'POST',
+                headers: {
+                    'Authorization': 'Bearer ' + currentToken
+                }
+            });
+            showSuccess('Stream started successfully');
+        }
+
+        function stopStream() {
+            if (!currentToken) {
+                showError('No active token. Please authenticate first.');
+                return;
+            }
+            fetch('/camera/stop', {
+                method: 'POST',
+                headers: {
+                    'Authorization': 'Bearer ' + currentToken
+                }
+            });
+            showSuccess('Stream stopped successfully');
+        }   
+
         function refreshStream() {
-            const img = document.querySelector('.webcam-stream');
-            img.src = '/video_feed?' + new Date().getTime();
+            if (!currentToken) {
+                showError('No active token. Please authenticate first.');
+                return;
+            }
+            
+                         const img = document.getElementById('webcamStream');
+             img.src = '/camera/feed?token=' + encodeURIComponent(currentToken) + '&t=' + new Date().getTime();
         }
 
         function takeSnapshot() {
-            window.open('/snapshot', '_blank');
+            if (!currentToken) {
+                showError('No active token. Please authenticate first.');
+                return;
+            }
+            
+            window.open('/camera/snapshot?token=' + encodeURIComponent(currentToken), '_blank');
         }
+
+        function disconnect() {
+            currentToken = '';
+            localStorage.removeItem('jwt_token');
+            
+            document.getElementById('webcamStream').style.display = 'none';
+            document.getElementById('controls').style.display = 'none';
+            document.getElementById('tokenInput').value = '';
+            hideMessages();
+            
+            showSuccess('Disconnected successfully');
+        }
+
+        // Handle Enter key in token input
+        document.getElementById('tokenInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                authenticateAndShowStream();
+            }
+        });
     </script>
 </body>
 </html>

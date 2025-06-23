@@ -6,8 +6,8 @@ import threading
 import queue
 from typing import Optional, Tuple
 from app.settings import settings
-from app.exceptions.camera import CameraNotFoundError, CameraNotAvailableError, StreamingError
-from app.models.api.camera import CameraStatusResponse, StreamStatusResponse
+from app.exceptions.camera import CameraNotAvailableError, StreamingError
+from app.models.api.camera import CameraStatusResponse
 from app.log import get_logger
 
 logger = get_logger(__name__)
@@ -173,14 +173,6 @@ class Camera:
             resolution="%sx%s" % (settings.camera_width, settings.camera_height) if is_opened else None
         )
     
-    def get_stream_status(self) -> StreamStatusResponse:
-        """Get streaming status information."""
-        return StreamStatusResponse(
-            is_active=self.is_streaming,
-            camera_id=self.device_id if self.cap else None,
-            frame_count=self.frame_queue.qsize()
-        )
-
     def release(self) -> None:
         """Release camera resources."""
         self.stop_streaming()
