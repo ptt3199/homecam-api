@@ -70,6 +70,13 @@ run_container() {
     echo "✅ Container started successfully"
 }
 
+# Function to connect to network
+connect_network() {
+    echo "🔗 Connecting to network..."
+    docker network connect jarvis-proxy ${CONTAINER_NAME}
+    echo "✅ Network connected"
+}
+
 # Function to show container status
 show_status() {
     echo "📊 Container Status:"
@@ -94,6 +101,7 @@ main() {
     pull_image
     check_cameras
     run_container
+    connect_network
     
     # Wait a moment for container to start
     sleep 3
