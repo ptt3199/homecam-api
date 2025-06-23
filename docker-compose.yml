@@ -17,6 +17,12 @@ services:
       - CAMERA_WIDTH=1280
       - CAMERA_HEIGHT=720
       - CAMERA_FPS=10
+      # Authentication settings
+      - STREAMING_TOKEN_SECRET=your-production-streaming-secret-change-this
+    # Add DNS resolution for external services like Clerk
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
     # Add privileged access for camera devices
     privileged: true
     # Alternative: use specific capabilities instead of privileged

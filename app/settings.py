@@ -6,6 +6,9 @@ class Settings(BaseSettings):
   camera_height: int = 720
   camera_fps: int = 10  
   
+  # Authentication settings
+  streaming_token_secret: str = "your-streaming-secret-key-change-in-production"
+  
   model_config = SettingsConfigDict(
     env_file=".env", 
     env_file_empty=True,

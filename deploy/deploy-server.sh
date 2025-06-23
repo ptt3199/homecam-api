@@ -9,6 +9,7 @@ set -e
 IMAGE_NAME="ptt3199/homecam-api:latest"
 CONTAINER_NAME="homecam-api"
 PORT="8020"
+STREAMING_TOKEN_SECRET="${STREAMING_TOKEN_SECRET:-your-streaming-secret-key-change-in-production}"
 
 # Environment variables for camera configuration
 CAMERA_DEVICE_ID="${CAMERA_DEVICE_ID:-0}"
@@ -60,10 +61,13 @@ run_container() {
         --device=/dev/video0:/dev/video0 \
         --device=/dev/video1:/dev/video1 \
         --device=/dev/video2:/dev/video2 \
+        --dns=8.8.8.8 \
+        --dns=8.8.4.4 \
         -e CAMERA_DEVICE_ID=${CAMERA_DEVICE_ID} \
         -e CAMERA_WIDTH=${CAMERA_WIDTH} \
         -e CAMERA_HEIGHT=${CAMERA_HEIGHT} \
         -e CAMERA_FPS=${CAMERA_FPS} \
+        -e STREAMING_TOKEN_SECRET=${STREAMING_TOKEN_SECRET} \
         --privileged \
         ${IMAGE_NAME}
     
@@ -77,6 +81,36 @@ connect_network() {
     echo "✅ Network connected"
 }
 
+# Function to test network connectivity
+test_connectivity() {
+    echo "🌐 Testing network connectivity..."
+    
+    # Test basic API health
+    if curl -s http://localhost:${PORT}/health > /dev/null; then
+        echo "✅ API health check passed"
+    else
+        echo "❌ API health check failed"
+        return 1
+    fi
+    
+    # Test network connectivity from inside container
+    echo "🔍 Testing external connectivity from container..."
+    if docker exec ${CONTAINER_NAME} curl -s --max-time 10 https://www.google.com > /dev/null; then
+        echo "✅ External internet connectivity working"
+    else
+        echo "❌ External internet connectivity failed"
+        echo "   This may cause Clerk authentication issues"
+    fi
+    
+    # Test Clerk domain connectivity
+    if docker exec ${CONTAINER_NAME} curl -s --max-time 10 https://clerk.com > /dev/null; then
+        echo "✅ Clerk domain connectivity working"
+    else
+        echo "❌ Clerk domain connectivity failed"
+        echo "   Check firewall/proxy settings"
+    fi
+}
+
 # Function to show container status
 show_status() {
     echo "📊 Container Status:"
@@ -88,11 +122,16 @@ show_status() {
     echo "   Local:    http://localhost:${PORT}"
     echo "   Network:  http://$(hostname -I | awk '{print $1}'):${PORT}"
     echo ""
+    echo "🔍 Test endpoints:"
+    echo "   Health:       curl http://localhost:${PORT}/health"
+    echo "   Network test: curl http://localhost:${PORT}/health/network"
+    echo ""
     echo "📋 Useful commands:"
     echo "   View logs:    docker logs ${CONTAINER_NAME}"
     echo "   Follow logs:  docker logs -f ${CONTAINER_NAME}"
     echo "   Stop:         docker stop ${CONTAINER_NAME}"
     echo "   Restart:      docker restart ${CONTAINER_NAME}"
+    echo "   Debug net:    docker exec ${CONTAINER_NAME} python test_clerk_connectivity.py"
 }
 
 # Main execution
@@ -104,13 +143,23 @@ main() {
     connect_network
     
     # Wait a moment for container to start
-    sleep 3
+    echo "⏳ Waiting for container to start..."
+    sleep 5
     
     show_status
+    
+    # Test network connectivity for Clerk authentication
+    echo ""
+    test_connectivity
     
     echo ""
     echo "🎉 Deployment completed!"
     echo "   Check logs with: docker logs -f ${CONTAINER_NAME}"
+    echo ""
+    echo "🔐 For Clerk authentication to work:"
+    echo "   1. Ensure the above connectivity tests pass"
+    echo "   2. Set a secure STREAMING_TOKEN_SECRET environment variable"
+    echo "   3. Test with: curl -H \"Authorization: Bearer <jwt>\" http://localhost:${PORT}/camera/status"
 }
 
 # Help function
@@ -126,10 +175,11 @@ show_help() {
     echo "  --help            Show this help message"
     echo ""
     echo "Environment variables:"
-    echo "  CAMERA_DEVICE_ID  Camera device index"
-    echo "  CAMERA_WIDTH      Camera resolution width"
-    echo "  CAMERA_HEIGHT     Camera resolution height"
-    echo "  CAMERA_FPS        Camera frames per second"
+    echo "  CAMERA_DEVICE_ID       Camera device index"
+    echo "  CAMERA_WIDTH           Camera resolution width"
+    echo "  CAMERA_HEIGHT          Camera resolution height"
+    echo "  CAMERA_FPS             Camera frames per second"
+    echo "  STREAMING_TOKEN_SECRET Secret key for streaming authentication (required)"
     echo ""
     echo "Examples:"
     echo "  $0                                    # Use defaults"

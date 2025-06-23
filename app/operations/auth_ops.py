@@ -35,7 +35,8 @@ class ClerkJWTVerifier:
             return self.jwks_cache[jwks_url]
         
         try:
-            with httpx.Client(timeout=30.0) as client:
+            logger.info("Fetching JWKS from URL: %s", jwks_url)
+            with httpx.Client(timeout=30.0, verify=True) as client:
                 response = client.get(jwks_url)
                 response.raise_for_status()
                 jwks = response.json()
@@ -43,11 +44,30 @@ class ClerkJWTVerifier:
                 # Cache the result
                 self.jwks_cache[jwks_url] = jwks
                 self.jwks_cache_time = current_time
+                logger.info("Successfully fetched and cached JWKS from %s", jwks_url)
                 
                 return jwks
                 
+        except httpx.ConnectError as e:
+            logger.error("Network connectivity error fetching JWKS from %s: %s", jwks_url, e)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"Cannot connect to authentication service: {str(e)}"
+            )
+        except httpx.TimeoutException as e:
+            logger.error("Timeout error fetching JWKS from %s: %s", jwks_url, e)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Authentication service timeout"
+            )
+        except httpx.HTTPStatusError as e:
+            logger.error("HTTP error fetching JWKS from %s: %s", jwks_url, e)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"Authentication service error: {e.response.status_code}"
+            )
         except Exception as e:
-            logger.error("Failed to fetch JWKS from %s: %s", jwks_url, e)
+            logger.error("Unexpected error fetching JWKS from %s: %s", jwks_url, e)
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Unable to fetch signing keys"
